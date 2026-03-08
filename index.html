@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>Neon Cube</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0f0f1b; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; touch-action: none; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 10%; width: 100%; text-align: center; pointer-events: none; }
+        .score-text { color: #fff; font-size: 60px; font-weight: 900; text-shadow: 0 0 20px #00ffff; margin: 0; line-height: 1; }
+        .high-score { color: #ff00ff; font-size: 20px; font-weight: bold; text-shadow: 0 0 10px #ff00ff; margin-top: 10px; }
+        #start-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(15, 15, 27, 0.8); color: white; z-index: 10; pointer-events: none; transition: opacity 0.3s; }
+        .blink { animation: blinker 1.5s linear infinite; font-size: 24px; color: #00ffff; text-shadow: 0 0 15px #00ffff; }
+        @keyframes blinker { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div class="score-text" id="score">0</div>
+        <div class="high-score">РЕКОРД: <span id="best-score">0</span></div>
+    </div>
+    <div id="start-screen">
+        <h1 style="color: #ff00ff; text-shadow: 0 0 20px #ff00ff; font-size: 40px; margin-bottom: 10px;">NEON CUBE</h1>
+        <div class="blink">ТАПНИ ЧТОБЫ НАЧАТЬ</div>
+    </div>
+    <canvas id="game"></canvas>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        if (tg.HeaderColor) tg.setHeaderColor('#0f0f1b');
+
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const bestScoreEl = document.getElementById('best-score');
+        const startScreen = document.getElementById('start-screen');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Загрузка рекорда
+        let bestScore = localStorage.getItem('neonBestScore') || 0;
+        bestScoreEl.innerText = bestScore;
+
+        let gameActive = false;
+        let score = 0;
+        let frames = 0;
+        let baseSpeed = 4;
+
+        let player = { x: 50, y: canvas.height / 2, size: 24, velocity: 0, gravity: 0.5, jump: -8 };
+        let obstacles = [];
+        let particles = [];
+        const gap = 170; // Расстояние между трубами
+
+        function createObstacle() {
+            let topHeight = Math.random() * (canvas.height - gap - 150) + 50;
+            obstacles.push({ x: canvas.width, top: topHeight, bottom: canvas.height - topHeight - gap, passed: false });
+        }
+
+        function createParticles(x, y) {
+            for(let i=0; i<5; i++) {
+                particles.push({ x: x, y: y + player.size, vx: (Math.random() - 0.5) * 4, vy: Math.random() * 4, life: 1 });
+            }
+        }
+
+        function update() {
+            if (!gameActive) return;
+
+            // Физика игрока
+            player.velocity += player.gravity;
+            player.y += player.velocity;
+
+            // Динамическая сложность (ускорение)
+            let currentSpeed = baseSpeed + (score * 0.1); 
+            if (currentSpeed > 10) currentSpeed = 10; // Максимальная скорость
+
+            // Спавн препятствий
+            let spawnRate = Math.max(70, 120 - score * 2);
+            if (frames % Math.floor(spawnRate) === 0) createObstacle();
+
+            // Обновление препятствий
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.x -= currentSpeed;
+
+                // Подсчет очков
+                if (!obs.passed && player.x > obs.x + 50) {
+                    score++;
+                    scoreEl.innerText = score;
+                    obs.passed = true;
+                    if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+                }
+
+                // Столкновения
+                if (player.x + player.size > obs.x && player.x < obs.x + 50) {
+                    if (player.y < obs.top || player.y + player.size > obs.top + gap) gameOver();
+                }
+
+                // Удаление старых препятствий
+                if (obs.x + 50 < 0) obstacles.splice(i, 1);
+            }
+
+            // Обновление частиц
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.05;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+
+            // Проверка границ экрана
+            if (player.y + player.size > canvas.height || player.y < 0) gameOver();
+
+            frames++;
+        }
+
+        function draw() {
+            // Очистка экрана с эффектом шлейфа
+            ctx.fillStyle = 'rgba(15, 15, 27, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!gameActive && score === 0 && frames === 0) return; // Не рисуем пока не начали
+
+            // Рисуем частицы
+            particles.forEach(p => {
+                ctx.fillStyle = `rgba(0, 255, 255, ${p.life})`;
+                ctx.fillRect(p.x, p.y, 4, 4);
+            });
+
+            // Рисуем препятствия (Неоновые столбы)
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#ff00ff';
+            ctx.fillStyle = '#ff00ff';
+            obstacles.forEach(obs => {
+                ctx.fillRect(obs.x, 0, 50, obs.top);
+                ctx.fillRect(obs.x, obs.top + gap, 50, obs.bottom);
+            });
+
+            // Рисуем игрока
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#00ffff';
+            ctx.fillStyle = '#00ffff';
+            
+            // Легкий наклон кубика при падении
+            ctx.save();
+            ctx.translate(player.x + player.size/2, player.y + player.size/2);
+            ctx.rotate(Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (player.velocity * 0.1))));
+            ctx.fillRect(-player.size/2, -player.size/2, player.size, player.size);
+            ctx.restore();
+
+            ctx.shadowBlur = 0; // Сбрасываем тень для производительности
+        }
+
+        function gameOver() {
+            gameActive = false;
+            if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+            
+            if (score > bestScore) {
+                bestScore = score;
+                localStorage.setItem('neonBestScore', bestScore);
+                bestScoreEl.innerText = bestScore;
+            }
+            startScreen.style.opacity = '1';
+        }
+
+        function resetGame() {
+            player.y = canvas.height / 2;
+            player.velocity = 0;
+            obstacles = [];
+            particles = [];
+            score = 0;
+            frames = 0;
+            scoreEl.innerText = score;
+            startScreen.style.opacity = '0';
+            gameActive = true;
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        window.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Убираем зум при двойном тапе
+            if (!gameActive) {
+                resetGame();
+            } else {
+                player.velocity = player.jump;
+                createParticles(player.x, player.y);
+                if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+            }
+        }, {passive: false});
+
+        loop();
+    </script>
+</body>
+</html>
